@@ -61,6 +61,8 @@
     }
     .sidebar-note strong { color: #fff; display: block; font-size: 12px; margin-bottom: 5px; }
     .main { flex: 1; min-width: 0; padding: 31px clamp(20px, 4vw, 54px) 50px; }
+    .app-error { background: #fff0f3; border: 1px solid #ecb8c5; border-radius: 9px; color: #681529; margin: 0 0 18px; padding: 12px 15px; }
+    .app-error[hidden] { display: none; }
     .topbar { align-items: flex-start; display: flex; justify-content: space-between; margin-bottom: 24px; }
     h1 { font-size: 25px; letter-spacing: -.8px; line-height: 1.2; margin: 0; }
     .subtitle { color: #f4dce8; margin-top: 6px; }
@@ -110,7 +112,7 @@
     .legend-name { align-items: center; color: #626d66; display: flex; gap: 7px; min-width: 0; }
     .legend-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .swatch { border-radius: 3px; flex: 0 0 8px; height: 8px; }
-    .legend-value { color: var(--ink); font-weight: 600; white-space: nowrap; }
+    .legend-value { color: #fff; font-weight: 600; white-space: nowrap; }
     .budget-list { display: grid; gap: 17px; }
     .budget-row-top { align-items: center; display: flex; justify-content: space-between; }
     .budget-category { font-weight: 550; }
@@ -205,13 +207,14 @@
         <button data-target="goals"><span class="nav-icon">◎</span>Savings goals</button>
         <button data-target="reports"><span class="nav-icon">▥</span>Reports</button>
       </nav>
-      <div class="sidebar-note"><strong>Your money, your plan.</strong>Your finances are saved only in this browser on this device.</div>
+      <div class="sidebar-note"><strong>Your money, your plan.</strong>Your transactions, budgets, and goals are saved in a local SQLite database on this device.</div>
     </aside>
     <main class="main">
       <header class="topbar" id="overview">
         <div><h1>TECHY TECHY GIRL MONTHLY INFO</h1><div class="subtitle">Here’s your personal money overview.</div></div>
         <label class="month-control"><span aria-hidden="true">▦</span><span class="sr-only">Report month</span><input id="monthPicker" type="month" aria-label="Report month"></label>
       </header>
+      <div class="app-error" id="appError" role="alert" hidden></div>
 
       <div class="grid">
         <section class="card summary" aria-label="Income summary">
@@ -278,344 +281,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <style>.sr-only{clip:rect(0,0,0,0);clip-path:inset(50%);height:1px;overflow:hidden;position:absolute;white-space:nowrap;width:1px}</style>
 
-  <script>
-    (() => {
-      "use strict";
-      const STORAGE_KEY = "my-money-finance-tracker-v1";
-      const palette = ["#28785d", "#d88b4a", "#6684bd", "#b96f8b", "#76a7a0", "#aa9955", "#8474af", "#89928c"];
-      const categories = ["Housing", "Utilities", "Education", "Groceries & toiletries", "Transport", "Health", "Entertainment", "Other"];
-      const incomeCategories = ["Salary", "Freelance", "Benefits", "Other income"];
-      const today = new Date();
-      const currentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
-      const formatMoney = (amount) => new Intl.NumberFormat("en-ZA", {
-        style: "currency", currency: "ZAR", maximumFractionDigits: 0
-      }).format(amount).replace(/\u00a0/g, " ");
-      const dateForMonth = (month, day) => `${month}-${String(day).padStart(2, "0")}`;
-      const defaultData = () => ({
-        transactions: [
-          { id: "rent", description: "Rent", category: "Housing", type: "expense", amount: 3000, date: dateForMonth(currentMonth, 1), note: "Monthly rent" },
-          { id: "electricity", description: "Electricity", category: "Utilities", type: "expense", amount: 400, date: dateForMonth(currentMonth, 1), note: "Monthly estimate" },
-          { id: "wifi", description: "Rain WiFi", category: "Utilities", type: "expense", amount: 670, date: dateForMonth(currentMonth, 1), note: "Monthly" },
-          { id: "college", description: "Whitestone College (monthly allocation)", category: "Education", type: "expense", amount: 1300, date: dateForMonth(currentMonth, 1), note: "R15,600 annual fee divided over 12 months" },
-          { id: "groceries", description: "Groceries & toiletries", category: "Groceries & toiletries", type: "expense", amount: 1500, date: dateForMonth(currentMonth, 1), note: "Monthly" },
-          { id: "transport", description: "Transportation", category: "Transport", type: "expense", amount: 800, date: dateForMonth(currentMonth, 1), note: "Monthly" }
-        ],
-        budgets: {
-          Housing: 3000, Utilities: 1070, Education: 1300,
-          "Groceries & toiletries": 1500, Transport: 800, Health: 0, Entertainment: 0, Other: 0
-        },
-        goals: []
-      });
-      const cloneDefault = () => JSON.parse(JSON.stringify(defaultData()));
-      function loadData() {
-        try {
-          const saved = localStorage.getItem(STORAGE_KEY);
-          if (!saved) return cloneDefault();
-          const parsed = JSON.parse(saved);
-          if (!parsed || !Array.isArray(parsed.transactions) || !parsed.budgets || !Array.isArray(parsed.goals)) throw new Error("Saved finance data has an unexpected format.");
-          return parsed;
-        } catch (error) {
-          if (error instanceof SyntaxError || error instanceof TypeError) {
-            console.error("Could not read saved finance data.", error);
-            showToast("Saved data could not be read. Your existing data has not been overwritten.");
-            return cloneDefault();
-          }
-          throw error;
-        }
-      }
-      let state = loadData();
-      let selectedMonth = currentMonth;
-      let toastTimer;
-      const monthPicker = document.getElementById("monthPicker");
-      monthPicker.value = selectedMonth;
-
-      function saveData() {
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-          return true;
-        } catch (error) {
-          console.error("Could not save finance data.", error);
-          showToast("Could not save changes in this browser. Check available storage.");
-          return false;
-        }
-      }
-      function showToast(message) {
-        const toast = document.getElementById("toast");
-        toast.textContent = message;
-        toast.classList.add("show");
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
-      }
-      function monthTransactions() {
-        return state.transactions.filter((item) => item.date.startsWith(selectedMonth));
-      }
-      function renderSummary() {
-        const transactions = monthTransactions();
-        const income = transactions.filter((t) => t.type === "income").reduce((sum, t) => sum + t.amount, 0);
-        const expenses = transactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + t.amount, 0);
-        const budget = Object.values(state.budgets).reduce((sum, n) => sum + n, 0);
-        document.getElementById("incomeTotal").textContent = formatMoney(income);
-        document.getElementById("expenseTotal").textContent = formatMoney(expenses);
-        const remaining = document.getElementById("remainingTotal");
-        remaining.textContent = formatMoney(income - expenses);
-        remaining.style.color = income - expenses < 0 ? "var(--red)" : "";
-        document.getElementById("budgetTotal").textContent = formatMoney(budget);
-      }
-      function renderTransactions() {
-        const rows = document.getElementById("transactionRows");
-        const transactions = monthTransactions().slice().sort((a, b) => b.date.localeCompare(a.date));
-        if (!transactions.length) {
-          rows.innerHTML = '<tr><td colspan="5" class="empty-row">No transactions this month. Add one to get started.</td></tr>';
-          return;
-        }
-        rows.innerHTML = transactions.map((t) => `
-          <tr>
-            <td><div class="transaction-name">${escapeHtml(t.description)}</div>${t.note ? `<div class="transaction-meta">${escapeHtml(t.note)}</div>` : ""}</td>
-            <td><span class="type-pill">${escapeHtml(t.type === "income" ? "Income · " + t.category : t.category)}</span></td>
-            <td>${formatDate(t.date)}</td>
-            <td class="${t.type === "income" ? "amount-income" : "amount-expense"}">${t.type === "income" ? "+" : "−"}${formatMoney(t.amount)}</td>
-            <td><button class="button danger" data-delete-transaction="${escapeHtml(t.id)}" aria-label="Delete ${escapeHtml(t.description)}">Delete</button></td>
-          </tr>`).join("");
-        rows.querySelectorAll("[data-delete-transaction]").forEach((button) => {
-          button.addEventListener("click", () => {
-            state.transactions = state.transactions.filter((t) => t.id !== button.dataset.deleteTransaction);
-            if (saveData()) { render(); showToast("Transaction deleted."); }
-          });
-        });
-      }
-      function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, (char) => ({
-          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-        })[char]);
-      }
-      function formatDate(value) {
-        const date = new Date(`${value}T12:00:00`);
-        return new Intl.DateTimeFormat("en-ZA", { day: "numeric", month: "short" }).format(date);
-      }
-      function renderBudgets() {
-        const list = document.getElementById("budgetList");
-        const expenses = monthTransactions().filter((t) => t.type === "expense");
-        const used = {};
-        for (const t of expenses) used[t.category] = (used[t.category] || 0) + t.amount;
-        const sorted = Object.entries(state.budgets).filter(([, amount]) => amount > 0);
-        if (!sorted.length) {
-          list.innerHTML = '<div class="goal-empty">No monthly budgets set. Choose “Edit budgets” to add one.</div>';
-          return;
-        }
-        list.innerHTML = sorted.map(([name, limit]) => {
-          const spent = used[name] || 0;
-          const percent = limit > 0 ? Math.min(spent / limit * 100, 100) : 0;
-          const over = spent > limit;
-          return `<div><div class="budget-row-top"><span class="budget-category">${escapeHtml(name)}</span><span class="budget-numbers">${formatMoney(spent)} / ${formatMoney(limit)}${over ? " · over budget" : ""}</span></div><div class="progress" role="progressbar" aria-label="${escapeHtml(name)} budget used" aria-valuenow="${Math.min(spent, limit)}" aria-valuemin="0" aria-valuemax="${limit}"><span class="${over ? "over" : ""}" style="width:${percent}%"></span></div></div>`;
-        }).join("");
-      }
-      function renderGoals() {
-        const list = document.getElementById("goalList");
-        if (!state.goals.length) {
-          list.innerHTML = '<div class="goal-empty">No savings goals yet. Add a goal and start building toward it.</div>';
-          return;
-        }
-        list.innerHTML = state.goals.map((goal) => {
-          const percent = Math.min(goal.saved / goal.target * 100, 100);
-          return `<div class="goal-item"><div class="goal-heading"><strong>${escapeHtml(goal.name)}</strong><button class="button danger" data-contribute="${escapeHtml(goal.id)}">+ Add savings</button></div><div class="goal-amount">${formatMoney(goal.saved)} saved of ${formatMoney(goal.target)}${goal.date ? ` · target ${formatDate(goal.date)}` : ""}</div><div class="progress" role="progressbar" aria-label="${escapeHtml(goal.name)} progress" aria-valuenow="${goal.saved}" aria-valuemin="0" aria-valuemax="${goal.target}"><span style="width:${percent}%"></span></div></div>`;
-        }).join("");
-        list.querySelectorAll("[data-contribute]").forEach((button) => button.addEventListener("click", () => openContribution(button.dataset.contribute)));
-      }
-      function renderCategories() {
-        const expenses = monthTransactions().filter((t) => t.type === "expense");
-        const totals = {};
-        for (const t of expenses) totals[t.category] = (totals[t.category] || 0) + t.amount;
-        const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]);
-        const total = entries.reduce((sum, [, amount]) => sum + amount, 0);
-        document.getElementById("donutTotal").textContent = formatMoney(total);
-        const legend = document.getElementById("categoryLegend");
-        if (!entries.length) {
-          document.getElementById("categoryDonut").style.background = "conic-gradient(#e8eae5 0deg 360deg)";
-          legend.innerHTML = '<div class="section-hint">No expenses recorded this month.</div>';
-          return;
-        }
-        let current = 0;
-        const stops = entries.map(([name, amount], i) => {
-          const start = current;
-          current += amount / total * 360;
-          return `${palette[i % palette.length]} ${start}deg ${current}deg`;
-        });
-        document.getElementById("categoryDonut").style.background = `conic-gradient(${stops.join(", ")})`;
-        legend.innerHTML = entries.map(([name, amount], i) => `<div class="legend-row"><div class="legend-name"><span class="swatch" style="background:${palette[i % palette.length]}"></span><span>${escapeHtml(name)}</span></div><span class="legend-value">${formatMoney(amount)}</span></div>`).join("");
-      }
-      function renderChart() {
-        const canvas = document.getElementById("cashflowChart");
-        const empty = document.getElementById("chartEmpty");
-        const year = Number(selectedMonth.slice(0, 4));
-        const monthData = Array.from({ length: 12 }, (_, month) => {
-          const key = `${year}-${String(month + 1).padStart(2, "0")}`;
-          return state.transactions.filter((t) => t.date.startsWith(key)).reduce((sums, t) => {
-            sums[t.type] += t.amount;
-            return sums;
-          }, { income: 0, expense: 0 });
-        });
-        const hasData = monthData.some((month) => month.income > 0 || month.expense > 0);
-        empty.hidden = hasData;
-        canvas.setAttribute("aria-label", `Bar chart of monthly income and expenses for ${year}.`);
-        if (!hasData) {
-          const ctx = canvas.getContext("2d");
-          if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-          return;
-        }
-        const rect = canvas.getBoundingClientRect();
-        const ratio = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.round(rect.width * ratio));
-        canvas.height = Math.max(1, Math.round(rect.height * ratio));
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.scale(ratio, ratio);
-        const width = rect.width, height = rect.height;
-        const left = 42, right = 8, top = 9, bottom = 25;
-        const plotWidth = width - left - right, plotHeight = height - top - bottom;
-        const maxValue = Math.max(1, ...monthData.flatMap((m) => [m.income, m.expense]));
-        const step = plotWidth / 12;
-        ctx.clearRect(0, 0, width, height);
-        ctx.font = "10px system-ui, sans-serif";
-        ctx.textAlign = "right";
-        for (let line = 0; line <= 3; line++) {
-          const y = top + plotHeight * line / 3;
-          const value = maxValue * (3 - line) / 3;
-          ctx.strokeStyle = "#edf0ec"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(width - right, y); ctx.stroke();
-          ctx.fillStyle = "#89928c";
-          const short = value >= 1000 ? `R${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : `R${Math.round(value)}`;
-          ctx.fillText(short, left - 7, y + 3);
-        }
-        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        monthData.forEach((data, i) => {
-          const center = left + step * (i + .5);
-          const barWidth = Math.max(2, Math.min(8, step * .29));
-          const incomeHeight = data.income / maxValue * plotHeight;
-          const expenseHeight = data.expense / maxValue * plotHeight;
-          ctx.fillStyle = "#28785d";
-          ctx.beginPath(); ctx.roundRect(center - barWidth - 1, top + plotHeight - incomeHeight, barWidth, Math.max(incomeHeight, data.income ? 2 : 0), 2); ctx.fill();
-          ctx.fillStyle = "#d88b4a";
-          ctx.beginPath(); ctx.roundRect(center + 1, top + plotHeight - expenseHeight, barWidth, Math.max(expenseHeight, data.expense ? 2 : 0), 2); ctx.fill();
-          ctx.fillStyle = "#89928c"; ctx.textAlign = "center"; ctx.fillText(monthNames[i], center, height - 7);
-        });
-      }
-      function render() {
-        renderSummary(); renderTransactions(); renderBudgets(); renderGoals(); renderCategories(); renderChart();
-      }
-      function openModal(title, fields, onSubmit, submitText) {
-        const backdrop = document.getElementById("modalBackdrop");
-        const form = document.getElementById("modalForm");
-        document.getElementById("modalTitle").textContent = title;
-        form.innerHTML = fields + '<div class="form-error" id="formError" role="alert"></div><div class="form-actions"><button type="button" class="button secondary" id="cancelModal">Cancel</button><button type="submit" class="button">' + escapeHtml(submitText || "Save") + "</button></div>";
-        backdrop.classList.add("open");
-        form.querySelector("[data-autofocus]")?.focus();
-        document.getElementById("closeModal").onclick = closeModal;
-        document.getElementById("cancelModal").onclick = closeModal;
-        backdrop.onclick = (event) => { if (event.target === backdrop) closeModal(); };
-        form.onsubmit = (event) => {
-          event.preventDefault();
-          const error = onSubmit(new FormData(form));
-          if (error) { document.getElementById("formError").textContent = error; return; }
-          closeModal();
-          render();
-        };
-      }
-      function closeModal() { document.getElementById("modalBackdrop").classList.remove("open"); }
-      function openTransaction() {
-        const categoryOptions = (items) => items.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("");
-        openModal("Add transaction", `
-          <div class="field"><label for="transactionType">Type</label><select id="transactionType" name="type"><option value="expense">Expense</option><option value="income">Income</option></select></div>
-          <div class="field"><label for="description">Description</label><input id="description" name="description" maxlength="80" required data-autofocus placeholder="e.g. Salary or water bill"></div>
-          <div class="field"><label for="category">Category</label><select id="category" name="category">${categoryOptions(categories)}</select></div>
-          <div class="field"><label for="amount">Amount (R)</label><input id="amount" name="amount" type="number" min="0.01" step="0.01" required placeholder="0.00"></div>
-          <div class="field"><label for="transactionDate">Date</label><input id="transactionDate" name="date" type="date" value="${dateForMonth(selectedMonth, 1)}" required></div>
-          <div class="field"><label for="note">Note (optional)</label><input id="note" name="note" maxlength="120" placeholder="Add a short note"></div>`,
-          (form) => {
-            const amount = Number(form.get("amount"));
-            const date = String(form.get("date"));
-            if (!Number.isFinite(amount) || amount <= 0) return "Enter an amount greater than zero.";
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T12:00:00`).getTime())) return "Choose a valid date.";
-            state.transactions.push({
-              id: makeId(), description: String(form.get("description")).trim(), category: String(form.get("category")),
-              type: String(form.get("type")), amount, date, note: String(form.get("note")).trim()
-            });
-            if (!saveData()) return "Could not save this transaction. Please check browser storage and try again.";
-            selectedMonth = date.slice(0, 7); monthPicker.value = selectedMonth;
-            showToast("Transaction added.");
-            return "";
-          }, "Add transaction");
-        const typeField = document.getElementById("transactionType");
-        const categoryField = document.getElementById("category");
-        typeField.addEventListener("change", () => {
-          categoryField.innerHTML = categoryOptions(typeField.value === "income" ? incomeCategories : categories);
-        });
-      }
-      function openBudgets() {
-        const budgetFields = categories.map((category) => `
-          <div class="field"><label for="budget-${escapeHtml(category)}">${escapeHtml(category)} monthly limit (R)</label>
-          <input id="budget-${escapeHtml(category)}" name="budget:${escapeHtml(category)}" type="number" min="0" step="0.01" value="${Number(state.budgets[category] || 0)}" required></div>`).join("");
-        openModal("Edit monthly budgets", budgetFields, (form) => {
-          const budgets = {};
-          for (const category of categories) {
-            const value = Number(form.get(`budget:${category}`));
-            if (!Number.isFinite(value) || value < 0) return "Budget amounts must be zero or more.";
-            budgets[category] = value;
-          }
-          state.budgets = budgets;
-          if (!saveData()) return "Could not save budgets. Please check browser storage and try again.";
-          showToast("Budgets updated.");
-          return "";
-        }, "Save budgets");
-      }
-      function openGoal() {
-        openModal("Create savings goal", `
-          <div class="field"><label for="goalName">Goal name</label><input id="goalName" name="name" maxlength="60" required data-autofocus placeholder="e.g. Emergency fund"></div>
-          <div class="field"><label for="goalTarget">Savings target (R)</label><input id="goalTarget" name="target" type="number" min="0.01" step="0.01" required placeholder="0.00"></div>
-          <div class="field"><label for="goalSaved">Already saved (R)</label><input id="goalSaved" name="saved" type="number" min="0" step="0.01" value="0" required></div>
-          <div class="field"><label for="goalDate">Target date (optional)</label><input id="goalDate" name="date" type="date"></div>`,
-          (form) => {
-            const target = Number(form.get("target")), saved = Number(form.get("saved"));
-            if (!Number.isFinite(target) || target <= 0 || !Number.isFinite(saved) || saved < 0) return "Enter a target above zero and savings of zero or more.";
-            state.goals.push({ id: makeId(), name: String(form.get("name")).trim(), target, saved, date: String(form.get("date")) });
-            if (!saveData()) return "Could not save this goal. Please check browser storage and try again.";
-            showToast("Savings goal added.");
-            return "";
-          }, "Create goal");
-      }
-      function openContribution(id) {
-        const goal = state.goals.find((item) => item.id === id);
-        if (!goal) return;
-        openModal(`Add savings to ${goal.name}`, `
-          <div class="section-hint">Current progress: ${formatMoney(goal.saved)} of ${formatMoney(goal.target)}</div>
-          <div class="field"><label for="contribution">Amount to add (R)</label><input id="contribution" name="amount" type="number" min="0.01" step="0.01" required data-autofocus placeholder="0.00"></div>`,
-          (form) => {
-            const amount = Number(form.get("amount"));
-            if (!Number.isFinite(amount) || amount <= 0) return "Enter an amount greater than zero.";
-            goal.saved += amount;
-            if (!saveData()) { goal.saved -= amount; return "Could not save this contribution. Please check browser storage and try again."; }
-            showToast("Savings contribution recorded.");
-            return "";
-          }, "Add savings");
-      }
-      function makeId() {
-        return globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
-          ? globalThis.crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      }
-
-      monthPicker.addEventListener("change", () => {
-        if (monthPicker.value) { selectedMonth = monthPicker.value; render(); }
-      });
-      document.getElementById("addTransaction").addEventListener("click", openTransaction);
-      document.getElementById("editBudgets").addEventListener("click", openBudgets);
-      document.getElementById("addGoal").addEventListener("click", openGoal);
-      document.querySelectorAll("[data-target]").forEach((button) => button.addEventListener("click", () => {
-        document.querySelectorAll("[data-target]").forEach((item) => item.classList.toggle("active", item.dataset.target === button.dataset.target));
-        document.getElementById(button.dataset.target).scrollIntoView({ behavior: "smooth", block: "start" });
-      }));
-      window.addEventListener("resize", renderChart);
-      document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeModal(); });
-      render();
-    })();
-  </script>
+  <script src="app.js" defer></script>
 </body>
 </html>

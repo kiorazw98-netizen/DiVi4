@@ -1,0 +1,13 @@
+{
+  "name": "dephine-monthly-budget",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local personal budget tracker with SQLite storage",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
